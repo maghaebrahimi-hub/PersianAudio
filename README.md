@@ -8,3 +8,5 @@
 - پخش با موتور Text-to-Speech خود Android
 - ذخیره خروجی صوتی
 - ساخت خودکار APK با GitHub Actions
+
+Build trigger: v1.0
