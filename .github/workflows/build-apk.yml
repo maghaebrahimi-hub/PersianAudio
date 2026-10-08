@@ -32,13 +32,48 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      - name: Optimize long document audio chunks
+      - name: Apply v2.3 UI and long-document fixes
         run: |
           python - <<'PY'
           from pathlib import Path
           p = Path('app/src/main/java/com/example/persianaudio/MainActivity.java')
           s = p.read_text(encoding='utf-8')
           s = s.replace('splitByLength(seg.text, 650)', 'splitByLength(seg.text, 1400)')
+
+          if 'clearOriginal.setText' not in s:
+              needle = '        root.addView(originalBox, new LinearLayout.LayoutParams(-1, -2));\n'
+              addition = '''        root.addView(originalBox, new LinearLayout.LayoutParams(-1, -2));
+
+        Button clearOriginal = new Button(this);
+        clearOriginal.setText("پاک کردن متن اصلی و ترجمه");
+        clearOriginal.setOnClickListener(v -> {
+            stopPlayback();
+            originalBox.setText("");
+            persianBox.setText("");
+            languageInfo.setText("زبان: هنوز بررسی نشده");
+            pendingSaveText = "";
+            status.setText("متن‌ها پاک شدند؛ آماده ورود متن جدید.");
+        });
+        root.addView(clearOriginal, new LinearLayout.LayoutParams(-1, -2));
+'''
+              s = s.replace(needle, addition, 1)
+
+          if 'clearPersian.setText' not in s:
+              needle = '        root.addView(persianBox, new LinearLayout.LayoutParams(-1, -2));\n'
+              addition = '''        root.addView(persianBox, new LinearLayout.LayoutParams(-1, -2));
+
+        Button clearPersian = new Button(this);
+        clearPersian.setText("پاک کردن ترجمه فارسی");
+        clearPersian.setOnClickListener(v -> {
+            stopPlayback();
+            persianBox.setText("");
+            pendingSaveText = "";
+            status.setText("ترجمه فارسی پاک شد.");
+        });
+        root.addView(clearPersian, new LinearLayout.LayoutParams(-1, -2));
+'''
+              s = s.replace(needle, addition, 1)
+
           p.write_text(s, encoding='utf-8')
           PY
 
@@ -46,10 +81,10 @@ jobs:
         run: gradle assembleDebug --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk PersianAudioTranslator-v2.2.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk PersianAudioTranslator-v2.3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PersianAudioTranslator-v2.2
-          path: PersianAudioTranslator-v2.2.apk
+          name: PersianAudioTranslator-v2.3
+          path: PersianAudioTranslator-v2.3.apk
