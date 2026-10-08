@@ -32,14 +32,24 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Optimize long document audio chunks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/src/main/java/com/example/persianaudio/MainActivity.java')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('splitByLength(seg.text, 650)', 'splitByLength(seg.text, 1400)')
+          p.write_text(s, encoding='utf-8')
+          PY
+
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk PersianAudio.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk PersianAudioTranslator-v2.2.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: PersianAudio-APK
-          path: PersianAudio.apk
+          name: PersianAudioTranslator-v2.2
+          path: PersianAudioTranslator-v2.2.apk
