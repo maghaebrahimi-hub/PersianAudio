@@ -9,10 +9,12 @@ import android.os.Bundle;
 import android.provider.OpenableColumns;
 import android.view.Gravity;
 import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -25,17 +27,12 @@ import com.tom_roush.pdfbox.android.PDFBoxResourceLoader;
 import com.tom_roush.pdfbox.pdmodel.PDDocument;
 import com.tom_roush.pdfbox.text.PDFTextStripper;
 
-import java.io.BufferedInputStream;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -49,6 +46,7 @@ public class MainActivity extends Activity {
     private EditText persianBox;
     private TextView status;
     private TextView languageInfo;
+    private Spinner voiceSpinner;
 
     private Translator translator;
     private MediaPlayer player;
@@ -63,15 +61,6 @@ public class MainActivity extends Activity {
     private interface AudioCallback {
         void onReady(List<File> files);
         void onError(Exception e);
-    }
-
-    private static class TtsRequest {
-        final String lang;
-        final String text;
-        TtsRequest(String lang, String text) {
-            this.lang = lang;
-            this.text = text;
-        }
     }
 
     private static class LangSegment {
@@ -94,7 +83,7 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(24, 24, 24, 28);
+        root.setPadding(24, 24, 24, 30);
         scroll.addView(root);
 
         TextView title = new TextView(this);
@@ -104,7 +93,7 @@ public class MainActivity extends Activity {
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("PDF / TXT فارسی → صوت فارسی\nPDF / TXT انگلیسی → ترجمه فارسی → صوت فارسی");
+        subtitle.setText("فارسی → صوت فارسی\nانگلیسی → ترجمه فارسی → صوت فارسی");
         subtitle.setTextSize(15);
         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
         subtitle.setTextDirection(View.TEXT_DIRECTION_RTL);
@@ -124,7 +113,7 @@ public class MainActivity extends Activity {
         root.addView(originalLabel);
 
         originalBox = new EditText(this);
-        originalBox.setHint("متن فارسی یا انگلیسی را اینجا Paste کنید، یا فایل باز کنید...");
+        originalBox.setHint("متن فارسی یا انگلیسی را Paste کنید، یا PDF/TXT باز کنید...");
         originalBox.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         originalBox.setGravity(Gravity.TOP | Gravity.RIGHT);
         originalBox.setMinLines(7);
@@ -157,6 +146,19 @@ public class MainActivity extends Activity {
         persianBox.setTextSize(16);
         root.addView(persianBox, new LinearLayout.LayoutParams(-1, -2));
 
+        TextView voiceLabel = new TextView(this);
+        voiceLabel.setText("صدای فارسی");
+        voiceLabel.setTextDirection(View.TEXT_DIRECTION_RTL);
+        voiceLabel.setPadding(0, 10, 0, 4);
+        root.addView(voiceLabel);
+
+        voiceSpinner = new Spinner(this);
+        ArrayAdapter<String> voices = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"زن - Dilara", "مرد - Farid"});
+        voices.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        voiceSpinner.setAdapter(voices);
+        root.addView(voiceSpinner, new LinearLayout.LayoutParams(-1, -2));
+
         LinearLayout audioButtons = new LinearLayout(this);
         audioButtons.setOrientation(LinearLayout.HORIZONTAL);
         audioButtons.setGravity(Gravity.CENTER);
@@ -170,7 +172,6 @@ public class MainActivity extends Activity {
         stop.setText("توقف");
         stop.setOnClickListener(v -> stopPlayback());
         audioButtons.addView(stop, new LinearLayout.LayoutParams(0, -2, 1));
-
         root.addView(audioButtons, new LinearLayout.LayoutParams(-1, -2));
 
         Button save = new Button(this);
@@ -179,7 +180,7 @@ public class MainActivity extends Activity {
         root.addView(save, new LinearLayout.LayoutParams(-1, -2));
 
         TextView note = new TextView(this);
-        note.setText("نکته: ترجمه انگلیسی→فارسی با ML Kit انجام می‌شود. مدل ترجمه در اولین استفاده دانلود می‌شود. تولید صدای فارسی آنلاین است و به صدای فارسی نصب‌شده روی گوشی وابسته نیست. اصطلاحات انگلیسی باقی‌مانده در متن با صدای انگلیسی خوانده می‌شوند.");
+        note.setText("ترجمه انگلیسی→فارسی با ML Kit انجام می‌شود. صدای فارسی با موتور آنلاین Microsoft Edge Neural ساخته می‌شود و به زبان‌های Text-to-Speech نصب‌شده روی گوشی وابسته نیست. برای ترجمه اولیه مدل و برای تولید صدا اینترنت لازم است.");
         note.setTextDirection(View.TEXT_DIRECTION_RTL);
         note.setTextSize(13);
         note.setPadding(0, 12, 0, 6);
@@ -223,9 +224,7 @@ public class MainActivity extends Activity {
                 String lower = name.toLowerCase(Locale.ROOT);
                 String text = lower.endsWith(".pdf") ? readPdf(uri) : readTxt(uri);
                 String clean = cleanText(text);
-                if (clean.isEmpty()) {
-                    throw new Exception("متنی از فایل استخراج نشد. اگر PDF اسکن‌شده است، OCR لازم دارد.");
-                }
+                if (clean.isEmpty()) throw new Exception("متنی از فایل استخراج نشد. اگر PDF اسکن‌شده است، OCR لازم دارد.");
                 runOnUiThread(() -> {
                     originalBox.setText(clean);
                     persianBox.setText("");
@@ -275,7 +274,6 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "ابتدا متن وارد کنید یا فایل باز کنید.", Toast.LENGTH_SHORT).show();
             return;
         }
-
         updateLanguageInfo(source);
         if (!looksEnglish(source)) {
             persianBox.setText(source);
@@ -289,12 +287,9 @@ public class MainActivity extends Activity {
                 .setSourceLanguage(TranslateLanguage.ENGLISH)
                 .setTargetLanguage(TranslateLanguage.PERSIAN)
                 .build();
-
         if (translator != null) translator.close();
         translator = Translation.getClient(options);
-        DownloadConditions conditions = new DownloadConditions.Builder().build();
-
-        translator.downloadModelIfNeeded(conditions)
+        translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
                 .addOnSuccessListener(v -> {
                     status.setText("مدل آماده است؛ در حال ترجمه به فارسی...");
                     List<String> chunks = splitByLength(source, 1100);
@@ -310,11 +305,10 @@ public class MainActivity extends Activity {
         if (index >= chunks.size()) {
             String translated = cleanText(result.toString());
             persianBox.setText(translated);
-            status.setText("ترجمه فارسی آماده شد. می‌توانید متن را ویرایش یا صوت را تولید کنید.");
+            status.setText("ترجمه فارسی آماده شد. می‌توانید آن را ویرایش یا صوت تولید کنید.");
             if (callback != null) callback.onReady(translated);
             return;
         }
-
         status.setText("در حال ترجمه... " + (index + 1) + " از " + chunks.size());
         translator.translate(chunks.get(index))
                 .addOnSuccessListener(t -> {
@@ -329,18 +323,15 @@ public class MainActivity extends Activity {
     }
 
     private void ensurePersianText(TextCallback callback) {
-        String editedPersian = cleanText(persianBox.getText().toString());
-        if (!editedPersian.isEmpty()) {
-            callback.onReady(editedPersian);
-            return;
-        }
-        translateOrPrepare(callback);
+        String edited = cleanText(persianBox.getText().toString());
+        if (!edited.isEmpty()) callback.onReady(edited);
+        else translateOrPrepare(callback);
     }
 
     private void playPersianAudio() {
         ensurePersianText(text -> {
             stopPlayback();
-            status.setText("در حال ساخت صدای فارسی آنلاین...");
+            status.setText("در حال ساخت صدای فارسی Neural...");
             createAudioFiles(text, new AudioCallback() {
                 @Override public void onReady(List<File> files) {
                     runOnUiThread(() -> {
@@ -405,23 +396,34 @@ public class MainActivity extends Activity {
     }
 
     private void createAudioFiles(String text, AudioCallback callback) {
+        final boolean male = voiceSpinner.getSelectedItemPosition() == 1;
+        final String faVoice = male ? "fa-IR-FaridNeural" : "fa-IR-DilaraNeural";
+        final String enVoice = male ? "en-US-GuyNeural" : "en-US-AvaNeural";
+
         new Thread(() -> {
             try {
-                List<TtsRequest> requests = makeTtsRequests(text);
+                List<LangSegment> segments = splitMixedLanguage(cleanText(text));
+                List<LangSegment> requests = new ArrayList<>();
+                for (LangSegment seg : segments) {
+                    for (String part : splitByLength(seg.text, 650)) {
+                        if (!part.trim().isEmpty()) requests.add(new LangSegment(seg.lang, part.trim()));
+                    }
+                }
                 if (requests.isEmpty()) throw new Exception("متنی برای خواندن وجود ندارد.");
 
-                List<File> files = new ArrayList<>();
-                File dir = new File(getCacheDir(), "online_tts");
+                File dir = new File(getCacheDir(), "edge_tts");
                 if (!dir.exists() && !dir.mkdirs()) throw new Exception("ساخت پوشه موقت ممکن نشد.");
                 File[] old = dir.listFiles();
                 if (old != null) for (File f : old) f.delete();
 
+                List<File> files = new ArrayList<>();
                 for (int i = 0; i < requests.size(); i++) {
-                    TtsRequest req = requests.get(i);
-                    final int done = i + 1;
+                    LangSegment req = requests.get(i);
+                    int done = i + 1;
                     runOnUiThread(() -> status.setText("در حال تولید صدا... " + done + " از " + requests.size()));
                     File file = new File(dir, String.format(Locale.US, "part_%04d.mp3", i));
-                    downloadTts(req, file);
+                    String voice = "en".equals(req.lang) ? enVoice : faVoice;
+                    EdgeTtsClient.synthesizeToFile(req.text, voice, file);
                     files.add(file);
                 }
                 callback.onReady(files);
@@ -429,31 +431,6 @@ public class MainActivity extends Activity {
                 callback.onError(e);
             }
         }).start();
-    }
-
-    private void downloadTts(TtsRequest req, File file) throws Exception {
-        String q = URLEncoder.encode(req.text, "UTF-8");
-        String address = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=" + req.lang + "&q=" + q;
-        HttpURLConnection conn = (HttpURLConnection) new URL(address).openConnection();
-        conn.setConnectTimeout(15000);
-        conn.setReadTimeout(30000);
-        conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) PersianAudioTranslator/2.0");
-        conn.setRequestProperty("Accept", "audio/mpeg,*/*");
-        conn.setRequestProperty("Referer", "https://translate.google.com/");
-        int code = conn.getResponseCode();
-        if (code != 200) {
-            conn.disconnect();
-            throw new Exception("سرویس صوت پاسخ نداد (HTTP " + code + "). اتصال اینترنت را بررسی کنید.");
-        }
-        try (BufferedInputStream in = new BufferedInputStream(conn.getInputStream());
-             FileOutputStream out = new FileOutputStream(file)) {
-            byte[] buffer = new byte[8192];
-            int n;
-            while ((n = in.read(buffer)) > 0) out.write(buffer, 0, n);
-        } finally {
-            conn.disconnect();
-        }
-        if (!file.exists() || file.length() < 100) throw new Exception("فایل صوتی معتبر دریافت نشد.");
     }
 
     private void playNextFile() {
@@ -495,21 +472,10 @@ public class MainActivity extends Activity {
         }
     }
 
-    private List<TtsRequest> makeTtsRequests(String text) {
-        List<TtsRequest> result = new ArrayList<>();
-        for (LangSegment seg : splitMixedLanguage(cleanText(text))) {
-            for (String part : splitByLength(seg.text, 170)) {
-                String p = part.trim();
-                if (!p.isEmpty()) result.add(new TtsRequest(seg.lang, p));
-            }
-        }
-        return result;
-    }
-
     private List<LangSegment> splitMixedLanguage(String text) {
         List<LangSegment> out = new ArrayList<>();
         if (text.isEmpty()) return out;
-        String currentLang = "fa";
+        String currentLang = containsPersian(text) ? "fa" : "en";
         StringBuilder current = new StringBuilder();
 
         for (int i = 0; i < text.length(); i++) {
@@ -539,9 +505,7 @@ public class MainActivity extends Activity {
             if (!out.isEmpty() && out.get(out.size() - 1).lang.equals(seg.lang)) {
                 LangSegment last = out.remove(out.size() - 1);
                 out.add(new LangSegment(last.lang, last.text + " " + seg.text));
-            } else {
-                out.add(seg);
-            }
+            } else out.add(seg);
         }
         return out;
     }
@@ -568,11 +532,8 @@ public class MainActivity extends Activity {
     }
 
     private void updateLanguageInfo(String text) {
-        if (looksEnglish(text)) {
-            languageInfo.setText("زبان تشخیص داده‌شده: انگلیسی → ترجمه به فارسی");
-        } else {
-            languageInfo.setText("زبان تشخیص داده‌شده: فارسی / متن ترکیبی فارسی و انگلیسی");
-        }
+        if (looksEnglish(text)) languageInfo.setText("زبان تشخیص داده‌شده: انگلیسی → ترجمه به فارسی");
+        else languageInfo.setText("زبان تشخیص داده‌شده: فارسی / متن ترکیبی فارسی و انگلیسی");
     }
 
     private boolean looksEnglish(String text) {
@@ -583,7 +544,12 @@ public class MainActivity extends Activity {
             else if (isLatinChar(c)) en++;
         }
         if (en < 12) return false;
-        return en > Math.max(20, (int)(fa * 1.35));
+        return en > Math.max(20, (int) (fa * 1.35));
+    }
+
+    private boolean containsPersian(String text) {
+        for (int i = 0; i < text.length(); i++) if (isPersianChar(text.charAt(i))) return true;
+        return false;
     }
 
     private boolean isPersianChar(char c) {
