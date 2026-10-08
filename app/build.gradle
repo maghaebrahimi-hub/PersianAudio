@@ -7,14 +7,15 @@ android {
     compileSdk 35
 
     defaultConfig {
-        applicationId 'com.example.persianaudio.v11'
+        applicationId 'com.example.persianaudio.translator'
         minSdk 24
         targetSdk 35
         versionCode 1
-        versionName '1.1.1'
+        versionName '2.0'
     }
 }
 
 dependencies {
     implementation 'com.tom-roush:pdfbox-android:2.0.27.0'
+    implementation 'com.google.mlkit:translate:17.0.3'
 }
