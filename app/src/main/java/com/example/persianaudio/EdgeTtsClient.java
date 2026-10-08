@@ -26,6 +26,16 @@ public final class EdgeTtsClient {
     private static final String CHROMIUM_VERSION = "143.0.3650.75";
     private static final String SEC_MS_GEC_VERSION = "1-" + CHROMIUM_VERSION;
     private static final long WIN_EPOCH = 11644473600L;
+    private static final Object REQUEST_LOCK = new Object();
+    private static long lastRequestStartedAt = 0L;
+
+    private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
+            .connectTimeout(25, TimeUnit.SECONDS)
+            .readTimeout(0, TimeUnit.MILLISECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .pingInterval(20, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .build();
 
     private EdgeTtsClient() {}
 
@@ -33,6 +43,37 @@ public final class EdgeTtsClient {
         if (text == null || text.trim().isEmpty()) throw new Exception("متن برای تولید صدا خالی است.");
         if (voice == null || voice.trim().isEmpty()) throw new Exception("صدای انتخابی نامعتبر است.");
 
+        Exception last = null;
+        for (int attempt = 1; attempt <= 4; attempt++) {
+            try {
+                throttleRequests();
+                synthesizeOnce(text, voice, outputFile);
+                return;
+            } catch (Exception e) {
+                last = e;
+                if (outputFile.exists()) outputFile.delete();
+                if (attempt < 4) {
+                    try { Thread.sleep(900L * attempt); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        throw new Exception("تولید صدا متوقف شد.", ie);
+                    }
+                }
+            }
+        }
+        String msg = (last == null || last.getMessage() == null) ? "خطای نامشخص در سرویس صوت" : last.getMessage();
+        throw new Exception("پس از چند تلاش، این بخش صوت ساخته نشد: " + msg, last);
+    }
+
+    private static void throttleRequests() throws InterruptedException {
+        synchronized (REQUEST_LOCK) {
+            long now = System.currentTimeMillis();
+            long wait = 650L - (now - lastRequestStartedAt);
+            if (wait > 0) Thread.sleep(wait);
+            lastRequestStartedAt = System.currentTimeMillis();
+        }
+    }
+
+    private static void synthesizeOnce(String text, String voice, File outputFile) throws Exception {
         if (outputFile.exists()) outputFile.delete();
         File parent = outputFile.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
@@ -43,6 +84,7 @@ public final class EdgeTtsClient {
         final CountDownLatch done = new CountDownLatch(1);
         final AtomicReference<Throwable> failure = new AtomicReference<>();
         final AtomicReference<WebSocket> wsRef = new AtomicReference<>();
+        final AtomicReference<Boolean> turnEnded = new AtomicReference<>(false);
 
         String connectionId = UUID.randomUUID().toString().replace("-", "");
         String gec = generateSecMsGec();
@@ -55,12 +97,6 @@ public final class EdgeTtsClient {
         String major = CHROMIUM_VERSION.split("\\.")[0];
         String userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                 + "(KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36 Edg/" + major + ".0.0.0";
-
-        OkHttpClient client = new OkHttpClient.Builder()
-                .connectTimeout(20, TimeUnit.SECONDS)
-                .readTimeout(0, TimeUnit.MILLISECONDS)
-                .writeTimeout(20, TimeUnit.SECONDS)
-                .build();
 
         Request request = new Request.Builder()
                 .url(url)
@@ -83,7 +119,11 @@ public final class EdgeTtsClient {
                         + "{\"context\":{\"synthesis\":{\"audio\":{\"metadataoptions\":{"
                         + "\"sentenceBoundaryEnabled\":\"false\",\"wordBoundaryEnabled\":\"false\"},"
                         + "\"outputFormat\":\"audio-24khz-48kbitrate-mono-mp3\"}}}}\r\n";
-                webSocket.send(config);
+                if (!webSocket.send(config)) {
+                    failure.compareAndSet(null, new Exception("ارسال تنظیمات به سرویس صوت ناموفق بود."));
+                    done.countDown();
+                    return;
+                }
 
                 String requestId = UUID.randomUUID().toString().replace("-", "");
                 String lang = voice.startsWith("fa-") ? "fa-IR" : "en-US";
@@ -97,12 +137,17 @@ public final class EdgeTtsClient {
                         + "X-Timestamp:" + date + "Z\r\n"
                         + "Path:ssml\r\n\r\n"
                         + ssml;
-                webSocket.send(ssmlRequest);
+                if (!webSocket.send(ssmlRequest)) {
+                    failure.compareAndSet(null, new Exception("ارسال متن به سرویس صوت ناموفق بود."));
+                    done.countDown();
+                }
             }
 
             @Override
             public void onMessage(WebSocket webSocket, String textMessage) {
-                if (textMessage != null && textMessage.contains("Path:turn.end")) {
+                if (textMessage == null) return;
+                if (textMessage.contains("Path:turn.end")) {
+                    turnEnded.set(true);
                     done.countDown();
                     webSocket.close(1000, "done");
                 }
@@ -140,21 +185,24 @@ public final class EdgeTtsClient {
 
             @Override
             public void onClosed(WebSocket webSocket, int code, String reason) {
+                if (!turnEnded.get() && failure.get() == null && code != 1000) {
+                    failure.compareAndSet(null, new Exception("ارتباط صوت قبل از پایان بسته شد (کد " + code + ")."));
+                }
                 done.countDown();
             }
         };
 
-        client.newWebSocket(request, listener);
-        boolean finished = done.await(45, TimeUnit.SECONDS);
+        CLIENT.newWebSocket(request, listener);
+        boolean finished = done.await(90, TimeUnit.SECONDS);
         WebSocket ws = wsRef.get();
         if (!finished && ws != null) ws.cancel();
+
         synchronized (audioOut) {
             audioOut.flush();
             audioOut.close();
         }
-        client.dispatcher().executorService().shutdown();
 
-        if (!finished) throw new Exception("زمان دریافت صدا تمام شد. اینترنت یا دسترسی به سرویس صوت را بررسی کنید.");
+        if (!finished) throw new Exception("زمان دریافت این بخش صوت تمام شد. اتصال اینترنت را بررسی کنید.");
         Throwable err = failure.get();
         if (err != null) throw new Exception(err.getMessage() == null ? "خطای ارتباط با سرویس صوت" : err.getMessage(), err);
         if (!outputFile.exists() || outputFile.length() < 300) {
